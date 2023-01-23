@@ -1,0 +1,1003 @@
+---
+title: "Stat497 Project"
+author: "E.Sekerci, 2141992"
+date: '2022-12-11'
+output:
+  rmdformats::material:
+    code_folding: show
+---
+
+# **Interim Report**
+
+<span style="color:red">**Data Description**</span> 
+
+- The data set contains the estimates of Monthly Retail and Food Services Sales in the US from the year 1992 up to 2019. These estimates are shown in millions of dollars and are based on data from the Monthly Retail Trade Survey, Annual Retail Trade Survey, * Service Annual Survey, and administrative records.
+
+- The data set is published on U.S. Census Bureau website (https://www.census.gov/econ/currentdata/?programCode=MARTS&startYear=1992&endYear=2022&categories[]=44X72&dataType=SM&geoLevel=US&adjusted=1&notAdjusted=1&errorData=0)
+
+<span style="color:red">**Initial Settings**</span> 
+
+```{r}
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(gridExtra)
+library(doParallel)
+library(sarima)
+library(forecast)
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(plotly)
+library(stats)
+library(fpp2)
+library(fUnitRoots)
+library(pdR)
+library(TSA)
+library(caschrono)
+library(anomalize)
+library(tibbletime)
+library(fpp2)
+library(aTSA)
+library(MASS)
+library(tseries)
+library(tidyquant)
+library(timetk)
+library(knitr)
+library(uroot)
+library(lmtest)
+library(rugarch)
+library(rmgarch)
+library(MTS)
+library(prophet)
+library(fpp)
+library(dygraphs)
+library(keras)
+```
+
+```{r}
+## Loading data set
+df <- read_csv("C:/Users/ibrah/Desktop/SeriesReport-202212230354.csv")
+```
+
+```{r}
+## Preview the data
+dplyr::glimpse(df)
+```
+```{r}
+class(df)
+```
+```{r}
+## Checking missing values
+sum(is.na(df))
+```
+```{r}
+head(df)
+```
+
+```{r}
+df$Period <- paste(df$Period, "01", sep="-")
+```
+
+```{r}
+df$Period <- as.Date(df$Period, format = "%b-%y-%d")
+#df$Value <- df$Value/1000
+```
+
+Here, we assign the first days of months to use the date function, we have edited the Period column.
+Furthermore, for the sake of clarity we scale numbers of the Value column.
+
+```{r}
+head(df)
+```
+
+To read time series data set in R, we can also use ts() function.
+
+```{r}
+df2<-ts(df[,2],start=c(1992,1,1), frequency=12)
+df2
+```
+<span style="color:darkred">**1. Time series plot and interpretation**</span> 
+
+```{r}
+summary(df2)
+```
+Our median and mean values are close to each other. In addition, it might be said that there exists some outliers.
+
+```{r}
+sd(df2)
+```
+```{r}
+## Usual area chart
+p <- df %>%
+  ggplot(aes(x=Period, y=Value)) +
+  geom_area(fill="#69b3a2", alpha=0.5) +
+  geom_line(color="#69b3a2") +
+  ylab("Billions of Dollars") + labs(title="Time Series Plot of Monthly Retail Trade Sales in USA")+
+  theme_ipsum()
+
+## Turn it interactive with ggplotly
+p <- ggplotly(p)
+p
+```
+
+There seems we have an increasing trend.
+
+```{r}
+ggplot(df, aes(x=Period, y=Value, color=Value)) + 
+  geom_line()+theme_minimal()
+```
+Now, let us examine time series decomposition that splits the time series into its components to improve our understanding of time series and forecast accuracy.
+
+```{r}
+ts1 <- ts(df$Value, start = 1992, frequency = 12)
+components.ts = decompose(ts1)
+plot(components.ts)
+```
+The plots point out that series is non-stationary since there exists increasing trend. Furthermore, the series show additive seasonal behavior and does not seem stationary in variance, nevertheless it is better to check.
+
+```{r}
+raw <- df$Value
+low <- ts(loess(Value~as.numeric(Period),df,span=0.5)$fitted, start=1992,frequency=12)
+hi <- ts(df$Value - loess(df$Value~as.numeric(df$Period),span=0.1)$fitted, start=1992,frequency=12)
+cycles <- raw - hi - low
+plot(ts.union(raw, low,hi,cycles),main="Decomposition of production as trend + noise + cycles")
+increase_rate = (low[336]-low[1])/(2019-1992)
+print(increase_rate)
+plot(hi[1:36],type = "l", main = "High frequency noise of a three-year span")
+```
+From the above plot we can draw following conclusions,
+
+- The low frequency plot shows us an estimate of the trend followed by the sales from 1992 to 2019. The average increase rate is 13.61939 billion dollars per year.
+
+- The high frequency plot shows us th seasonal changes in Retail Sales. When we zoom into high frequency we see a sales peak in December and also at around May and June and this pattern occurs over every year. The seasonal change have a period of one year.
+
+- The middle frequency plot tells us about any long term changes. We can see that there is a steady increase from 2004 to 2008, but from around 2nd quater of 2008 retail sales begin to decline and not until the last quater of 2009 it began to climb back. This shows the stock market crash on Sept. 29, 2008. The decline in Retail Sales partly reflects the economic downturn.
+
+```{r}
+cycle(df2)
+```
+```{r}
+df3<- df %>% dplyr::mutate(year = lubridate::year(Period), month = lubridate::month(Period))
+head(df3)
+```
+
+```{r}
+str(df3)
+```
+```{r}
+df3$month<-as.factor(df3$month)
+df3$year<-as.factor(df3$year)
+```
+
+```{r}
+bp <- ggplot(df3, aes(x=month, y=Value, fill=month)) + 
+  geom_boxplot()+
+  labs(title="Boxplot Across Months",x="Month", y = "Billions of Dollars")
+bp
+```
+Since the median values for each month are very close to each other, there does not very obvious seasonal components.
+
+```{r}
+bp <- ggplot(df3, aes(x=year, y=Value, fill=year)) + 
+  geom_boxplot()+
+  labs(title="Boxplot Across Yeasr",x="year", y = "Billions of Dollars")
+bp + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+- The above plot suggests that the series has a significant trend. Every year sales are increasing. Moreover, we see that there are some outliers present.
+
+```{r}
+forecast::ggseasonplot(x = as.ts(df2)) +
+  labs(y = "$ (billions)",
+       title = "Seasonal Plot: Retail Trade Sales")
+```
+```{r}
+ggseasonplot(x = as.ts(df2), polar = TRUE) +
+  labs(y = "$ (billions)",
+       title = "Seasonal Plot: Retail Trade Sales")
+```
+A particular useful variant of a season plot uses polar coordinates, where the time axis is circular rather than horizontal. Here, we plot the data with the conventional seasonal plot versus a polar coordinate option to illustrate this variant. Both plots illustrate a sharp increase in values in December and then a slow increase from Mar-May.
+
+```{r}
+ggsubseriesplot(df2) + ylab("$ (billions)") + ggtitle("Retail Trade Sales")
+```
+The blue lines in the subseries plot represent the mean for each month. The mean value in retail trade sales fluctuates over time.This form of plot enables the underlying seasonal pattern to be seen clearly, and also shows the changes in seasonality over time. It is especially useful in identifying changes within particular seasons. The plot displays the seasonality of Monthly retail trade in the US, as it is lowest in the first quarter, the upward angle of the retail sales at each month displays the upward trend in sales over the years and on December reaches the highest point of the year. The seasonality appears to have a frequency of 12 months, or 1 year. 
+
+```{r}
+# Create a lag plot of the oil data
+gglagplot(df2) + theme(axis.text.x = element_text(angle=90))+theme_minimal()
+```
+The plot provides the bivariate scatter plot for each level of lag (1-16 lags). If you look at the right-most 12 lag, you can see that the relationship appears strongest for it, thus supporting our seassonality pattern which appears in the acf plot as well.
+
+<span style="color:darkred">**2.	Make a anomaly detection and if necessary clean the series from anomalies (use anomalize, forecast (tsclean function) or AnomalyDetection packages).**</span>
+
+```{r}
+df %>% 
+  time_decompose(Value, method = "stl", frequency = "auto", trend = "auto") %>%
+  anomalize(remainder, method = "gesd", alpha = 0.05, max_anoms = 0.2) %>%
+  plot_anomaly_decomposition()
+```
+
+```{r}
+df %>% 
+  time_decompose(Value, method = "twitter", frequency = "auto", trend = "auto") %>%
+  anomalize(remainder, method = "gesd", alpha = 0.05, max_anoms = 0.2) %>%
+  plot_anomaly_decomposition()
+```
+
+```{r}
+df %>% 
+  time_decompose(Value) %>%
+  anomalize(remainder,alpha=0.1) %>%
+  time_recompose() %>%
+  plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+```
+
+```{r}
+#Extract the anomalies
+anomalies=df %>% time_decompose(Value) %>%  anomalize(remainder,alpha=0.1) %>%  time_recompose() %>%  filter(anomaly == 'Yes')
+```
+
+```{r}
+anomalies
+```
+```{r}
+anomalized_tbl <- df %>%
+time_decompose(Value) %>%
+anomalize(remainder,alpha=0.1) %>%
+clean_anomalies()
+```
+```{r}
+anomalized_tbl
+```
+
+```{r}
+new <- anomalized_tbl[,c("Period","observed_cleaned")]
+new$observed_cleaned<-as.double(gsub("\\..*","",new$observed_cleaned))
+new$Period <- as.Date(new$Period, format = "%b-%y-%d")
+new$observed_cleaned <- new$observed_cleaned/1000
+new
+```
+
+```{r}
+colnames(new) <- c('Period','Value')
+new
+```
+
+```{r}
+p1 <- df %>% ggplot(aes(x = Period, y = Value)) + geom_line() + geom_smooth(size=0.5) + 
+        ylab("$ [Billions of Dollars]") + ylim(c(100,600)) + 
+        ggtitle("Retail Trade and Food Services: U.S. Total \nSeasonally Adjusted Series - Monthly") +
+        scale_x_date(date_labels="%Y",date_breaks  ="5 year") + 
+        theme_bw()
+p1
+```
+
+```{r}
+df <- ts(new$Value,start=c(1992,1,1), frequency=12)
+```
+
+```{r}
+df
+```
+
+
+<span style="color:darkred">**3. Cross-Validation**</span>
+
+Before start the analysis, we should divide our dataset into two parts which are train and test model being necessary for model validation. There is no certain rule for this process, here we use %80 the data as train, and left as test set. We keep last 70 observation as test set.
+
+```{r}
+train<-window(df,end=c(2014,12))
+test<-window(df,start=c(2015,1))
+```
+
+```{r}
+train
+```
+```{r}
+test
+```
+<span style="color:darkred">**4.	Box-Cox transformation analysis: If the series need any transformation, do it. If the information criterion values are too close to each other, don’t transform the data (NOTE: For ETS, Prophet, TBATS and nnetar do not use transformed data. This part is only for ARIMA modelling part)..**</span> 
+
+```{r}
+BoxCox.ar(train)
+```
+```{r}
+BoxCox.ar(train, method = c("ols"))
+```
+In this case, we generate a lambda value with respect to ols method. The 95% confidence interval for λ contains the value of λ = 0 quite near its center and strongly suggests a logarithmic transformation (λ = 0) for these data.
+
+```{r}
+BoxCox.ar(train,method = c("yule-walker"))
+```
+In this case, we generate a lambda value with respect to yule-walker method. Since range of λ is very close to 1/2, y^0.5 transformation seems appropriate.
+
+```{r}
+autoplot(train)
+```
+Let's transform the series for specific value of lambda as well.
+
+```{r}
+lambda <- BoxCox.lambda(train)
+print(lambda)
+```
+```{r}
+train.t<-BoxCox(train,lambda)
+autoplot(train.t)
+```
+```{r}
+autoplot(sqrt(train))
+```
+```{r}
+df.t<-train
+```
+
+We can Use either 0.4144289-th power of the series or do y^05 transformations since the λ is very close to 0.5. It was decided to not use any transformation (this step is noted to be asked later).
+
+```{r}
+df.t
+```
+
+<span style="color:darkred">**5.	ACF, PACF plots, KPSS and ADF or PP test results for zero mean, mean and trend cases and their interpretation. For seasonal unit root, HEGY and OCSB or Canova-Hansen tests are required.**</span>
+
+```{r}
+summary(df.t)
+```
+
+```{r}
+autoplot(df2, ylab="$ (Billions)", main="Time Series Plot of Monthly Retail Trade Sales in the US")+theme_minimal()
+```
+
+It has increasing trend. It also displays some ups and downs which are the indication of stochastic trend (non-stationary).
+
+```{r}
+p1<-ggAcf(df.t,main="ACF of Retail Trade Sales", lag.max = 72)
+p2<-ggPacf(df.t,main="PACF of Retail Trade Sales", lag.max = 72)
+grid.arrange(p1,p2,nrow=1)
+```
+
+All values shown are significantly far from zero, and the only pattern is perhaps a linear decrease with increasing lag.
+ACF plot has slow decay which indicates non stationary series as well. Therefore, it may be concluded that there is a stochastic trend. However it is better to check it via several tests.
+
+```{r}
+acf(as.vector(df.t),main="Autocorrelation Function of Data Set",lag = 24)+theme_minimal()
+```
+```{r}
+pacf(as.vector(df.t),main="Partial Autocorrelation Function of Data Set",lag = 24)+theme_minimal()
+```
+
+<span style="color:red">**KPSS Test**</span> 
+
+- $H_0$ : The process is stationary. 
+
+- $H_1$ : The process is not stationary.
+
+```{r}
+kpss.test(df.t, null=c("Level"))
+```
+In this case, the p-value is less than the standard alpha value, so we’d reject the null hypothesis and conclude that the series is not stationary.
+
+***H0 is rejected at the first step***, this following hypothesis is used for the second step of the test.
+
+- $H_0$ : There is a deterministic trend
+
+- $H_1$ : There is a stochastic trend.
+
+```{r}
+kpss.test(df.t,null=c("Trend"))
+```
+Since p value is less than alpha, we'd reject the null hypothesis. Therefore we have enough evidence to conclude that the series have stochastic trend. Since the series show a seasonal pattern, seasonal unit root test gives the more realistic results.
+
+<span style="color:red">**HEGY Test**</span> 
+
+***Hypothesis for Regular Unit Root***
+
+- $H_0$ : The system has a regular unit root.
+
+- $H_1$ : The system doesn’t contain any regular unit root.
+
+***Hypothesis for Seasonal Unit Root***
+
+- $H_0$ : The system has a seasonal unit root.
+
+- $H_1$ : The system doesn’t contain any seasonal unit root.
+
+```{r}
+mean(df.t)
+```
+```{r}
+out<-HEGY.test(wts=df.t, itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+mean(diff(df.t,12))
+```
+```{r}
+out<-HEGY.test(wts=diff(df.t,12), itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+kpss.test(diff(df.t,12), null=c("Level"))
+```
+```{r}
+pp.test(diff(df.t,12))
+```
+```{r}
+dif=diff(df.t,12) #seasonal difference
+autoplot(dif,main="Time Series Plot of Differenced Series")+theme_minimal()
+```
+```{r}
+p1<-ggAcf(dif,main="Autocorrelation Function Plot",lag.max=46) +theme_minimal()#seasonal difference
+p2<-ggPacf(dif,main="Partial Autocorrelation Function Plot",lag.max=46)+theme_minimal()
+grid.arrange(p2,nrow=1)
+```
+
+```{r}
+mean(diff(df.t))
+```
+```{r}
+out<-HEGY.test(wts=diff(df.t), itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+kpss.test(diff(df.t), null=c("Level"))
+```
+```{r}
+pp.test(diff(df.t))
+```
+```{r}
+dif=diff(df.t) #regular difference
+autoplot(dif,main="TS Plot of Differenced Series")
+```
+```{r}
+p1<-ggAcf(dif,lag.max=100) #regular difference
+p2<-ggPacf(dif,lag.max=100)
+grid.arrange(p1,p2,nrow=1)
+```
+
+```{r}
+mean(diff(diff(df.t),12))
+```
+```{r}
+out<-HEGY.test(wts=diff(diff(df.t),12), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+dif=diff(diff(df.t),12) #both seasonal and regular difference
+autoplot(dif,main="TS Plot of Differenced Series")
+```
+```{r}
+p1<-ggAcf(dif,main="Autocorrelation Function Plot",lag.max=46) +theme_minimal() #both seasonal and regular difference
+p2<-ggPacf(dif,main="Partial Autocorrelation Function Plot",lag.max=46)+theme_minimal()
+grid.arrange(p1,p2,nrow=1)
+```
+
+```{r}
+ndiffs(df.t)
+```
+```{r}
+ndiffs(diff(df.t,12))
+```
+```{r}
+nsdiffs(df.t)
+```
+```{r}
+nsdiffs(diff(df.t))
+```
+```{r}
+ndiffs(diff(diff(df.t),12))
+```
+```{r}
+nsdiffs(diff(diff(df.t),12))
+```
+
+<span style="color:red">**Canova-Hansen Test**</span> 
+
+- $H_0$ : The series is purely deterministic and stationary.
+
+- $H_1$ : We have stochastic seasonality.
+
+```{r}
+ch.test(df.t, type = c("dummy"), lag1 = FALSE, NW.order = NULL, 
+  sid = NULL, xreg = NULL, pvalue = c("RS", "raw"), rs.nobsreg = 13)
+```
+Since p value is less than α, we reject the null hypothesis.
+
+<span style="color:darkred">**6.	If there is a trend, remove it either by detrending or differencing. You may need to apply unit root tests again until observing stationary series.**</span> 
+
+In order to remove stochastic trend, we apply differencing method on both regular ad seasonal lags. To take the difference of the series, we use diff() function.
+
+```{r}
+dif=diff(diff(df.t,12))
+autoplot(dif,main="Time Series Plot of Differenced Series") +theme_minimal()
+```
+
+<span style="color:red">**Philips-Perron Unit Root Test**</span> 
+
+- $H_0$ : The process has unit root (non-stationary/stoch. trend)
+
+- $H_1$ : The process does not have unit root.
+
+```{r}
+pp.test(dif)
+```
+Since p value is less than alpha, we'd reject the null hypothesis and conclude that the process does not have unit root. The result of the PP test indicates that we have a stationary series.
+
+```{r}
+kpss.test(dif,null=c("Level"))
+```
+Differenced series is stationary.
+
+```{r}
+ch.test(dif, type = c("dummy"), lag1 = FALSE, NW.order = NULL, 
+  sid = NULL, xreg = NULL, pvalue = c("RS", "raw"), rs.nobsreg = 13)
+```
+Since p value is greater than α, we fail to reject the null hypothesis. The seasonal pattern is purely deterministic and stationary.
+
+```{r}
+mean(dif)
+```
+```{r}
+out<-HEGY.test(wts=dif, itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+
+<span style="color:darkred">**7.	Then, look at the time series plot of a stationary series, ACF and PACF plots, information table, ESACF (last two are for non-seasonal series).**</span> 
+
+```{r}
+dif
+```
+
+```{r}
+p1<-ggAcf(dif,lag.max=60)
+p2<-ggPacf(dif,lag.max=60)
+grid.arrange(p1,p2,nrow=1)
+```
+```{r}
+acf(as.vector(dif),lag.max=36,ci.type='ma')
+```
+```{r}
+autoplot(decompose(dif))
+```
+
+<span style="color:darkred">**8.	Identify a proper ARMA or ARIMA model or SARIMA model.**</span> 
+
+- SARIMA(3,1,3)x(2,1,3)[12]
+- SARIMA(2,1,2)x(2,1,1)[12]
+- SARIMA(3,1,3)x(3,1,3)[12]
+
+and so on...
+We will try some others too.
+
+
+<span style="color:darkred">**9. After deciding the order of the possible model (s), run MLE or conditional or unconditional LSE and estimate the parameters. Compare the information criteria of several models. (Note: If there is a convergence problem, you can change your estimation method).**</span> 
+
+At the beginning we want to check what we will encounter if it is decided to taking regular differencing as well.
+
+```{r}
+fit1<-Arima(df.t,order = c(2, 1, 2), seasonal = c(2, 1, 1))
+fit1
+```
+The coefficient estimates are all highly significant, and we proceed to check further on this model.
+
+```{r}
+fit2<-Arima(df.t,order = c(4, 1, 3), seasonal = c(2, 1, 1))
+fit2
+```
+The coefficient estimates are all highly significant, and we proceed to check further on this model.
+
+```{r}
+fit3<-Arima(df.t,order = c(3, 0, 3), seasonal = c(0, 1, 2))
+fit3
+```
+```{r}
+fit4<-Arima(df.t,order = c(0, 1, 1), seasonal = c(0, 1, 1))
+fit4
+```
+
+```{r}
+fit5<-Arima(df.t,order = c(0, 0, 1), seasonal = c(0, 1, 1))
+fit5
+```
+```{r}
+fit5<-Arima(df.t,order = c(0, 1, 1), seasonal = c(0, 1, 1))
+fit5
+```
+```{r}
+fit6<-auto.arima(df.t)
+fit6
+```
+
+<span style="color:darkred">**10.	Diagnostic Checking:**</span>
+
+<span style="color:red">**a)	On the residuals, perform portmanteau lack of fit test, look at the ACF-PACF plots of the residuals (for all time points, ACF and PACF values should be in the white noise bands), look at the standardized residuals vs time plot to see any outliers or pattern.**</span>
+
+```{r}
+r=resid(fit1)
+```
+
+```{r}
+autoplot(r)+geom_line(y=0)+theme_minimal()+ggtitle("Plot of The Residuals")
+```
+Other than some strange behavior in the middle of the series, this plot does not suggest any major irregularities with the model, although we may need to investigate the model further for outliers, as the standardized residuals at November 2001 and November 2008 look suspicious.
+
+```{r}
+acf(as.vector(r),main="ACF of Standard Residuals",lag = 60)+theme_minimal()
+```
+
+If all spikes are in the WN band, the residuals are uncorrelated. In the ACF, almost all spikes are in the WN band. To be sure, let us apply formal test.
+
+```{r}
+pacf(as.vector(r),main="PACF of the Residuals",lag = 60)+theme_minimal()
+```
+```{r}
+plot(rstandard(fit1),ylab='Standardized residuals',type='l')
+abline(h=0)
+```
+```{r}
+#detectAO(fit1); detectIO(fit1)
+#fit5=arimax(df.t,order=c(2, 1, 2), seasonal=list(order=c(3, 1, 3), 
+#period=12),io=c(57)); fit5
+```
+
+
+<span style="color:red">**b)	Use histogram, QQ-plot and Shapiro-Wilk test (in ts analysis, economists prefer Jarque-Bera test) to check normality of residuals.**</span> 
+
+```{r}
+ggplot(r, aes(sample = r)) +stat_qq()+geom_qq_line()+ggtitle("Normal Q-Q Plot")+theme_minimal()
+```
+
+QQ Plot shows that most of the residuals of the model do not lie on 45 degree straight line (especially through tails). This indicates residuals are not normally distributed.
+
+```{r}
+ggplot(r,aes(x=r))+geom_histogram(bins=20)+geom_density()+ggtitle("Histogram of Residuals")+theme_minimal()
+```
+
+```{r}
+#calculate skewness
+skewness(r)
+```
+```{r}
+#calculate kurtosis
+kurtosis(r)
+```
+Since kurtosis of the series (residuals of the model) is greater than 3 we have a heavy tailed behavior/distribution.We have a nonconstant variance problem.
+
+```{r}
+shapiro.test(r)
+```
+Since p value is less than alpha, we reject Ho. Therefore, it can be said that we do not have enough evidence to claim that we have residuals with normal distribution. We’ll apply Box-Cox transformation.
+
+```{r}
+jarque.bera.test(r)
+```
+
+<span style="color:red">**c)	Perform Breusch-Godfrey test for possible autocorrelation in residual series. The result should be insignificant.**</span> 
+
+```{r}
+m = lm(r ~ 1+zlag(r))
+bgtest(m,order=6) #order is up to you
+```
+According to results of Breusch-Godfrey Test, we have 95% confident that the residuals of the model are correlated since p value is less than alpha.
+
+```{r}
+Box.test(r,lag=6,type = c("Ljung-Box"))
+```
+Since p value is greater than alpha, we have 95% confident that the residuals of the model are uncorrelated, according to results of Box-Ljung Test.
+
+```{r}
+Box.test(r,lag=6,type = c("Box-Pierce"))
+```
+Since p value is greater than alpha, we have 95% confident that the residuals of the model are uncorrelated, according to results of Box-Pierce Test.
+
+<span style="color:red">**d)	For the Heteroscedasticity, look at the ACF-PACF plots of the squared residuals (there should be no significant spikes); perform ARCH Engle's Test for Residual Heteroscedasticity under aTSA package. The result should be insignificant. If the result is significant, you can state that the error variance is not constant and it should be modelled, but don’t intend to model the variance. If there is a heteroscedasticity problem, most probably normality test on residuals will fail too. The high values in the lower and upper extremes destroy the normality due to high variation. In your project, you can state these only. When solving a real life problem, you cannot just state and quit dealing this problem!**</span> 
+
+```{r}
+rr=r^2
+g1<-ggAcf(as.vector(rr))+theme_minimal()+ggtitle("ACF of Squared Residuals")
+g2<-ggPacf(as.vector(rr))+theme_minimal()+ggtitle("PACF of Squared Residuals")  # homoscedasticity check
+grid.arrange(g1,g2,ncol=2)
+```
+```{r}
+m = lm(r ~ df.t+zlag(df.t)+zlag(df.t,2))
+bptest(m)
+```
+Since p value is less than alpha, we reject Ho. Therefore, we can say that we have enough evidence to claim that there is heteroscedasticity problem, according to results of Breusch-Pagan test.
+
+```{r}
+m1 = lm(r ~ df.t+zlag(df.t)+zlag(df.t,2)+zlag(df.t)^2+zlag(df.t,2)^2+zlag(df.t)*zlag(df.t,2))
+bptest(m1)
+```
+Since p value is less than alpha, we reject Ho. Therefore, we can say that we have enough evidence to claim that there is heteroscedasticity problem, according to results of Breusch-Pagan test.At the end, heteroscedasticity is detected so the volatility must be modeled using ARCH and GARCH methods.
+
+
+<span style="color:red">**ARCH-GARCH methods**</span>
+
+<span style="color:red">**Engle’s ARCH Test**</span> 
+
+- $H_0$ : Residuals exhibits no ARCH effects.
+
+- $H_1$ : ARCH(lag) effects are present.
+
+```{r}
+archTest(r)
+```
+Since p values is less than α, we reject Ho and verify the presence of ARCH effects.
+
+```{r}
+# start with default GARCH spec.
+spec = ugarchspec() #the empty function specifies the default model. 
+print(spec)
+```
+```{r}
+def.fit = ugarchfit(spec = spec, data = df.t)
+print(def.fit)
+```
+First of all, the estimated parameter of ARIMA(1,1) and GARCH(1,1) models were exhibited. It is seen except alpha and beta parameters, which are ... values, all parameters are significant.
+
+As you would know, Ljung Box Tests are used to test serial autocorrelation among the residuals. (Null: No autocorrelation) The results show that residuals have autocorrelation, but squared residuals not. (Look p values.)
+
+ARCH LM test is used to check presence of ARCH effect. (Null: Adequately fitted ARCH process) The results show that the GARCH process is not adequately fitted. (Look p values.)
+
+Sign Bias Test is used to test leverage effect in the standardized residuals. (Null: no significant negative and positive reaction shocks (if exist apARCH type models))
+
+The Nyblom stability test provides a means of testing for structural change within a time series. A structural change implies that the relationship between variables changes overtime e.g. for the regression y=βx beta changes over time. (Null: the parameter values are constant i.e. zero variance, the alternative hypothesis is that their variance > 0.) (Reject Ho, if Test Stat > CV.) Therefore, we can say that ar1(?),omega, alpha and beta have stability problem. We should also consider TGARCH models.
+
+Adjusted Pearson Goodness-of-Fit Test calculates the chi-squared goodness of fit test, which compares the empirical distribution of the standardized residuals with the theoretical ones from the chosen density. In this case, the chosen density is student t, not standard normal. However, this is not a problem because t-distribution approaches the normal distribution for n>30. It is seen that we have a normality problem.
+
+```{r}
+spec=ugarchspec(variance.model=list(model = "gjrGARCH"),
+                mean.model=list(armaOrder=c(2,1),include.mean=TRUE),distribution.model="norm") 
+def.fit2 = ugarchfit(spec, data=df.t)
+def.fit2
+```
+
+```{r}
+spec=ugarchspec(variance.model=list(model="apARCH", garchOrder=c(1,0)),
+                mean.model=list(armaOrder=c(0,0),include.mean=TRUE),distribution.model="norm")
+def.fit3= ugarchfit(spec, data = df.t, solver = 'hybrid')
+def.fit3
+```
+
+```{r}
+convergence(def.fit2)
+```
+
+```{r}
+plot(def.fit2, which = 'all')
+```
+```{r}
+coefficient <-coef(def.fit2)
+volatility <- sigma(def.fit2)
+long.run.variance <- uncvariance(def.fit2)
+coefficient
+```
+
+
+```{r}
+f<-ugarchforecast(def.fit2,n.ahead = 60)
+f
+```
+```{r}
+f@forecast
+s<-as.vector(f@forecast$seriesFor)
+bootp=ugarchboot(def.fit2,method=c("Partial")[1],n.ahead = 60,n.bootpred=500,n.bootfit=500)
+plot(bootp,which=2)
+```
+```{r}
+bootp
+```
+
+```{r}
+s_f=bootp@forc@forecast$seriesFor #this is for series forecasts
+s_f1=as.vector(s_f)
+```
+
+```{r}
+v_f=bootp@forc@forecast$sigmaFor#this is for variance forecasts
+```
+
+```{r}
+accuracy(s_f1,test)
+```
+
+
+<span style="color:darkred">**11.	Forecasting: The number of forecasts should be same as the length of your test data.**</span> 
+
+<span style="color:red">**a)	Perform Minimum MSE Forecast for the stochastic models (like ARIMA or SARIMA) **</span>
+
+```{r}
+fr.arima=forecast::forecast(fit1,h=60)
+fr.arima
+```
+
+```{r}
+test
+```
+
+```{r}
+accuracy(fr.arima,test)
+```
+
+```{r}
+autoplot(fr.arima)+theme_minimal()+ggtitle("Forecast of SARIMA")
+```
+
+<span style="color:red">**b)	Use ets code under the forecast package to choose the best exponential smoothing (simple, Holt’s, Holt-Winter’s) method that suits your series for deterministic forecasting.**</span>
+
+
+```{r}
+f.ets <- ets(train, model = "MMM")
+summary(f.ets)
+```
+
+```{r}
+fr.ets=forecast::forecast(f.ets, h=60)
+accuracy(fr.ets, test)
+```
+
+```{r}
+r=resid(f.ets)
+```
+
+```{r}
+shapiro.test(r)
+```
+
+```{r}
+autoplot(fr.ets)+autolayer(fitted(fr.ets),series="fitted")+theme_minimal()
+```
+```{r}
+fr.hw<-forecast::hw(df.t, h=60, seasonal="multiplicative")
+summary(fr.hw)
+```
+```{r}
+accuracy(fr.hw, test)
+```
+```{r}
+autoplot(fr.hw)
+```
+
+<span style="color:red">**c)	Obtain forecasts using Prophet.**</span> 
+
+```{r}
+ds<-c(seq(as.Date("1992/01/01"),as.Date("2014/12/01"),by="month"))
+df<-data.frame(ds,y=as.numeric(df.t))
+head(df,13)
+```
+
+```{r}
+forecast = df %>%  
+  do(predict(prophet(., yearly.seasonality = TRUE), 
+             make_future_dataframe(prophet(., yearly.seasonality = TRUE), freq = "month", periods = 60)))
+
+forecast
+```
+```{r}
+dim(df)
+```
+
+
+```{r}
+dim(forecast)
+```
+
+```{r}
+plot(fr.prophet, forecast)+theme_minimal()
+```
+
+```{r}
+prophet_plot_components(fr.prophet, forecast)
+```
+
+```{r}
+dyplot.prophet(fr.prophet, forecast)
+```
+```{r}
+accuracy(head(forecast$yhat,276),df.t)
+```
+
+```{r}
+accuracy(tail(forecast$yhat,60),test)
+```
+
+```{r}
+r=resid(forecast)
+```
+
+```{r}
+shapiro.test(r)
+```
+
+<span style="color:red">**d)	Obtain forecasts using TBATS**</span>
+
+```{r}
+tbatsmodel<-tbats(df.t,
+      use.box.cox      = TRUE,
+      use.trend        = TRUE,
+      use.damped.trend = TRUE,
+      use.arma.errors  = TRUE,
+      start.p = 0,
+      start.q = 0,
+      trace = TRUE)
+tbatsmodel
+```
+
+```{r}
+batsmodel<-bats(df.t)
+batsmodel
+```
+```{r}
+r=resid(batsmodel)
+```
+
+```{r}
+shapiro.test(r)
+```
+
+```{r}
+autoplot(df.t,main="TS plot of Train with TBATS Fitted") +autolayer(fitted(batsmodel), series="Fitted") +theme_minimal()
+```
+```{r}
+fr.bats<-forecast::forecast(batsmodel,h=60)
+fr.bats
+```
+
+```{r}
+autoplot(fr.bats)+autolayer(test,series="actual",color="red")+theme_minimal()
+```
+```{r}
+accuracy(fr.bats,test)
+```
+```{r}
+fr.tbats<-forecast::forecast(tbatsmodel,h=60)
+accuracy(fr.tbats,test)
+```
+
+<span style="color:red">**e)	Obtain forecasts using neural networks (nnetar)**</span> 
+
+```{r}
+set.seed(34)
+nnmodel<-nnetar(df.t, decay=0.008, maxit=200)
+nnmodel
+```
+
+```{r}
+autoplot(df.t)+autolayer(fitted(nnmodel))+theme_minimal()+ggtitle("Fitted Values of NN Model")
+```
+
+```{r}
+fr.nnetar<-forecast::forecast(nnmodel,h=60,PI=T)
+fr.nnetar
+```
+
+```{r}
+accuracy(fr.nnetar,test)
+```
+```{r}
+autoplot(fr.nnetar)
+```
+
+
+<span style="color:darkred">**12.	If you transformed the series for SARIMA model, back transform the series to reach the estimates for the original units. Don’t forget to transform the prediction limits.**</span>
+
+<span style="color:darkred">**13.	Calculate the forecast accuracy measures and state which model gives the highest performance for your dataset.**</span>
+
+```{r}
+accuracy(fr.arima,test)
+```
+
+<span style="color:darkred">**14.	Provide plots of the original time series, predictions, forecasts and prediction intervals on the same plot drawing the forecast origin for ARIMA models, exponential smoothing method, Prophet, TBATS and neural networks. The plot for each model should look like the following plot.**</span>
+
+```{r}
+autoplot(df.t)+autolayer(fitted(fr.arima))+autolayer(fr.arima)+autolayer(df.t)+theme_minimal()+ggtitle("Fitted Values of ARIMA Model")
+```
+
+```{r}
+autoplot(fr.arima, series="forecast Points")+
+  autolayer(fitted(fr.arima), series="fitted")+
+  autolayer(test, series = "test data")+
+  autolayer(df.t, series = "train set")+
+  theme_minimal()
+```
+
